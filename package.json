@@ -1,0 +1,8 @@
+{
+  "name": "libwebp",
+  "version": "0.1.0",
+  "description": "Compiled libwebp",
+  "main": "libwebp.js",
+  "license": "UNLICENSED",
+  "private": true
+}
