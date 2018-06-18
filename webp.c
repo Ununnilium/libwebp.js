@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include "emscripten.h"
 #include "src/webp/encode.h"
+#include "src/webp/decode.h"
 
 int result[2];
 EMSCRIPTEN_KEEPALIVE
@@ -12,6 +13,10 @@ void encode(uint8_t* img_in, int width, int height, float quality) {
 
   result[0] = (int)img_out;
   result[1] = size;
+}
+EMSCRIPTEN_KEEPALIVE
+void decode(uint8_t* input_data, size_t input_size, uint8_t* output_buffer, size_t output_buffer_size, size_t output_stride) {
+  WebPDecodeRGBAInto(input_data, input_size, output_buffer, output_buffer_size, output_stride);
 }
 
 EMSCRIPTEN_KEEPALIVE
