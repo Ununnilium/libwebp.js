@@ -2,8 +2,11 @@
 
 <head>
   <script src="libwebp.js"></script>
-  <!-- <script>
-    LibWebP({ ENVIRONMENT: "WEB" }).then((Module) => {
+  <script>
+    var globModule;
+    LibWebP({
+      ENVIRONMENT: "WEB"
+    }).then((Module) => {
       window.onload = () => {
         const api = {
           create_buffer: Module.cwrap('create_buffer', 'number', ['number', 'number']),
@@ -12,7 +15,12 @@
           encode: Module.cwrap('encode', '', ['number', 'number', 'number', 'number']),
           get_result_pointer: Module.cwrap('get_result_pointer', 'number', []),
           get_result_size: Module.cwrap('get_result_size', 'number', []),
-          decode: Module.cwrap('decode', '', ['number', 'number', 'number', 'number', 'number'])
+          decode: Module.cwrap('decode', '', ['number', 'number', 'number', 'number', 'number']),
+          get_image_size: Module.cwrap('get_image_size', 'number', ['number', 'number', 'number']),
+          malloc: Module._malloc,
+          heapu8: Module.HEAPU8,
+          heap32: Module.HEAP32,
+          free: Module._free
         };
         const blobToTypedArray = (blob) => {
           return new Promise((resolve, reject) => {
@@ -28,72 +36,73 @@
           const imgBlob = await (await fetch(img.src)).blob();
           const inputImg = await blobToTypedArray(imgBlob);
           const inputSize = inputImg.length * inputImg.BYTES_PER_ELEMENT;
-          const inputPointer = Module._malloc(inputSize);
-          const inputHeap = new Uint8Array(Module.HEAPU8.buffer, inputPointer, inputSize);
-          inputHeap.set(new Uint8Array(inputImg.buffer));
-          const outputSize = 4 * img.width * img.height * inputImg.BYTES_PER_ELEMENT;
-          const outputPointer = Module._malloc(outputSize);
-          const outputHeap = new Uint8ClampedArray(Module.HEAPU8.buffer, outputPointer, outputSize);
-          const outputStride = outputHeap.byteLength / img.height;
-          api.decode(inputHeap.byteOffset, inputHeap.byteLength, outputHeap.byteOffset, outputHeap.byteLength, outputStride);
-          Module._free(inputHeap.byteOffset);
-          const imageData = new ImageData(outputHeap, img.width, img.height);
+          const inputPointer = api.malloc(inputSize);
+          api.heapu8.set(inputImg, inputPointer);
+
+          const dimensionsSize = 2 * Int32Array.BYTES_PER_ELEMENT;
+          const dimensionsPointer = api.malloc(dimensionsSize);
+          if (api.get_image_size(inputPointer, inputSize, dimensionsPointer) === 0) {
+            throw new Error("Could not get image dimensions")
+          }
+          const dimensions = new Int32Array(api.heap32.buffer, dimensionsPointer, dimensionsSize);
+          const width = dimensions[0];
+          const height = dimensions[1];
+          api.free(dimensionsPointer);
+
+          const outputSize = 4 * width * height * Uint8ClampedArray.BYTES_PER_ELEMENT;
+          const outputPointer = api.malloc(outputSize);
+          const outputHeap = new Uint8ClampedArray(api.heapu8.buffer, outputPointer, outputSize);
+          const outputStride = outputSize / height;
+
+          api.decode(inputPointer, inputSize, outputPointer, outputSize,
+            outputStride);
+
+          api.free(inputPointer);
+          const imageData = new ImageData(outputHeap, width, height);
           const canvas = document.createElement("canvas");
-          canvas.width = img.width;
-          canvas.height = img.height;
+          canvas.width = width;
+          canvas.height = height;
           const ctx = canvas.getContext("2d");
           ctx.putImageData(imageData, 0, 0);
-          Module._free(outputHeap.byteOffset);
+          api.free(outputPointer);
           return canvas.toDataURL();
         };
 
-        // async function loadImage(src) {
-        //   // Load image
-        //   const imgBlob = await fetch(src).then(resp => resp.blob());
-        //   const img = await createImageBitmap(imgBlob);
-        //   // Make canvas same size as image
-        //   const canvas = document.createElement('canvas');
-        //   canvas.width = img.width;
-        //   canvas.height = img.height;
-        //   // Draw image onto canvas
-        //   const ctx = canvas.getContext('2d');
-        //   ctx.drawImage(img, 0, 0);
-        //   return ctx.getImageData(0, 0, img.width, img.height);
-        // }
+        const observer = new MutationObserver((mutations) => {
+          for (const mutation of mutations) {
+            Array.prototype.slice.call(mutation.addedNodes, 0).filter(node => node.nodeType === 1 && node.tagName ===
+              'IMG').forEach((img) => {
+              decodeWebP(img).then(dataUrl => {
+                img.src = dataUrl;
+              });
+            });
+          }
+        });
+        observer.observe(document.documentElement, {
+          childList: true,
+          subtree: true
+        });
 
-        // async function decodeImg(typedArray) {
-
-        // }
-        // loadImage('image.jpg').then((image) => {
-        //   const p = api.create_buffer(image.width, image.height);
-        //   Module.HEAP8.set(image.data, p);
-        //   api.encode(p, image.width, image.height, 100);
-        //   const resultPointer = api.get_result_pointer();
-        //   const resultSize = api.get_result_size();
-        //   const resultView = new Uint8Array(Module.HEAP8.buffer, resultPointer, resultSize);
-        //   const result = new Uint8Array(resultView);
-        //   const blob = new Blob([result], { type: 'image/webp' });
-        //   const blobURL = URL.createObjectURL(blob);
-        //   const img = document.createElement('img');
-        //   img.src = blobURL;
-        //   document.body.appendChild(img)
-
-        //   api.free_result(resultPointer);
-        //   api.destroy_buffer(p);
-        // });
         const img = document.getElementById("i1");
-        decodeWebP(img).then(base64 => {
-          console.log(base64.substring(0, 30));
-          img.src = base64;
-        })
+        decodeWebP(img).then(dataUrl => {
+          img.src = dataUrl;
+        });
+        addImage();
       };
     });
-  </script> -->
+
+    function addImage() {
+      const img = document.createElement("img");
+      img.setAttribute("id", "i2");
+      img.src =
+        "data:image/webp;base64,UklGRkQAAABXRUJQVlA4IDgAAADQAQCdASoQABAAAgA0JaACdLoB+AADsAD+8Lb1pXaaXO8cAWH/izkYjs83/4zZvyA/5Af/x5AAAA==";
+      document.body.appendChild(img);
+    }
+  </script>
 </head>
 
 <body>
-  <img id="i1" src="image.webp">
-  <img id="i2">
+  <img id="i1" src="image.webp" alt="img1">
 </body>
 
 </html>
