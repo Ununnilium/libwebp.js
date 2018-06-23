@@ -31,8 +31,3 @@ void free_result(uint8_t *result)
 {
   WebPFree(result);
 }
-
-int main()
-{
-  EM_ASM(webpLoaded());
-}
