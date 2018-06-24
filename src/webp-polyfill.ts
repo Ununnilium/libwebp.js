@@ -1,7 +1,7 @@
 declare const LibWebP: any;
 declare const WebAssembly: any;
 
-async function main() {
+async function webpPolyfill() {
     let libwebpApi;
 
     function webpSupported() {
@@ -20,15 +20,13 @@ async function main() {
 
     function uint8ArrayToBase64(bytes: Uint8Array): string {
         let binary = '';
-        const len = bytes.byteLength;
         for (const byte of bytes) {
             binary += String.fromCharCode(byte);
         }
         return "data:image/webp;base64," + window.btoa(binary);
     }
 
-    const decodeWebP = async (img: HTMLImageElement) => {
-        const imgBlob = await (await fetch(img.src)).blob();
+    const decodeWebP = async (imgBlob: Blob): Promise<ImageData> => {
         const inputImg = await blobToTypedArray(imgBlob);
         const inputSize = inputImg.length * inputImg.BYTES_PER_ELEMENT;
         const inputPointer = libwebpApi.malloc(inputSize);
@@ -51,54 +49,45 @@ async function main() {
 
         libwebpApi.decode(inputPointer, inputSize, outputPointer, outputSize,
             outputStride);
-
         libwebpApi.free(inputPointer);
-        const imageData = new ImageData(outputHeap, width, height);
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext("2d");
-        ctx.putImageData(imageData, 0, 0);
         libwebpApi.free(outputPointer);
-        return canvas.toDataURL();
+        return new ImageData(outputHeap, width, height);
     };
 
+    async function decodeWebPToDataUrl(imgBlob: Blob) {
+        const imageData = await decodeWebP(imgBlob);
+        const canvas = document.createElement("canvas");
+        canvas.width = imageData.width;
+        canvas.height = imageData.height;
+        const ctx = canvas.getContext("2d");
+        ctx.putImageData(imageData, 0, 0);
+        return canvas.toDataURL();
+    }
+
+    async function decodeBlobToImageBitmap(imgBlob: Blob) {
+        const imageData = await decodeWebP(imgBlob);
+    }
+
+    async function convertImgIfWebp(img: HTMLImageElement) {
+        const imgBlob: Blob = await (await fetch(img.src)).blob();
+            if (imgBlob.type === "image/webp") {
+                img.src = await decodeWebPToDataUrl(imgBlob);
+            }
+    }
+
     async function polyfillDecode(): Promise<void> {
+        const imgElements = document.getElementsByTagName("img");
+        Array.prototype.forEach.call(imgElements, convertImgIfWebp);
+        
         const observer = new MutationObserver((mutations) => {
             for (const mutation of mutations) {
                 Array.prototype.slice.call(mutation.addedNodes, 0).filter(node => node.nodeType === 1 && node.tagName ===
-                    'IMG').forEach(async (img) => {
-                        img.src = await decodeWebP(img);
-                    });
+                    'IMG').forEach(convertImgIfWebp);
             }
         });
         observer.observe(document.documentElement, {
             childList: true,
             subtree: true
-        });
-    }
-
-    function webpLoaded() {
-        LibWebP({
-            ENVIRONMENT: "WEB"
-        }).then((Module) => {
-            libwebpApi = {
-                create_buffer: Module.cwrap('create_buffer', 'number', ['number', 'number']),
-                destroy_buffer: Module.cwrap('destroy_buffer', '', ['number']),
-                free_result: Module.cwrap('free_result', '', ['number']),
-                encode: Module.cwrap('encode', '', ['number', 'number', 'number', 'number']),
-                get_result_pointer: Module.cwrap('get_result_pointer', 'number', []),
-                get_result_size: Module.cwrap('get_result_size', 'number', []),
-                decode: Module.cwrap('decode', '', ['number', 'number', 'number', 'number', 'number']),
-                get_image_size: Module.cwrap('get_image_size', 'number', ['number', 'number', 'number']),
-                malloc: Module._malloc,
-                heapu8: Module.HEAPU8,
-                heap32: Module.HEAP32,
-                free: Module._free
-            };
-            const event = new Event('webpLoaded');
-            const element = document.createElement('span');
-            element.dispatchEvent(event);
         });
     }
 
@@ -109,9 +98,10 @@ async function main() {
             script.onerror = reject;
             script.async = true;
             if (typeof WebAssembly === 'object') {
-                script.src = "/static/libwebp-wasm.js";
-            } else {
-                script.src = "/static/libwebp-asm.js";
+                script.src = "static/libwebp-wasm.js";
+            }
+            else {
+                script.src = "static/libwebp-asm.js";
             }
             document.head.appendChild(script);
         });
@@ -132,12 +122,11 @@ async function main() {
         libwebpApi.free_result(outputPointer);
         libwebpApi.free(resultPointer);
         return uint8ArrayToBase64(result);
-    };
+    }
 
-    function polyfillCanvasToDataURL() {
+    function getCanvasToDataUrlPolyfill() {
         const originalFunction = HTMLCanvasElement.prototype.toDataURL;
-        () => {
-            HTMLCanvasElement.prototype.toDataURL = (type?: string, ...args: any[]): string => {
+        return function(type?: string, ...args: any[]): string {
                 if (type === "image/webp") {
                     const ctx = this.getContext('2d');
                     let quality = Number(args[0]);
@@ -147,33 +136,42 @@ async function main() {
                     const imageData = ctx.getImageData(0, 0, this.width, this.height);
                     return encodeWebp(imageData, quality);
                 }
-                originalFunction(type, ...args);
+                return originalFunction.bind(this)(type, ...args);
             }
-        }
-
     }
 
-    if (!webpSupported) {
-        await fetchWebpPolyfill();
+    function getCreateImageBitmapPolyfill() {
+        const originalFunction = createImageBitmap;
+        return async function(image: HTMLImageElement | SVGImageElement | HTMLVideoElement | HTMLCanvasElement | ImageBitmap | ImageData | Blob, ...args: any[]): Promise<ImageBitmap> {
+                if (image instanceof Blob && image.type === "image/webp") {
+                    const imageData = await decodeWebP(image);
+                    return createImageBitmap(imageData, ...args);
+                }
+                return originalFunction(image, ...args);
+            }
+    }
+
+    if (!webpSupported()) {
+        fetchWebpPolyfill().then(() => {
         LibWebP({
             ENVIRONMENT: "WEB"
         }).then((Module) => {
             libwebpApi = {
-                create_buffer: Module.cwrap('create_buffer', 'number', ['number', 'number']),
-                destroy_buffer: Module.cwrap('destroy_buffer', '', ['number']),
                 free_result: Module.cwrap('free_result', '', ['number']),
                 encode: Module.cwrap('encode', '', ['number', 'number', 'number', 'number']),
-                get_result_pointer: Module.cwrap('get_result_pointer', 'number', []),
-                get_result_size: Module.cwrap('get_result_size', 'number', []),
                 decode: Module.cwrap('decode', '', ['number', 'number', 'number', 'number', 'number']),
                 get_image_size: Module.cwrap('get_image_size', 'number', ['number', 'number', 'number']),
                 malloc: Module._malloc,
                 heapu8: Module.HEAPU8,
                 heap32: Module.HEAP32,
-                free: Module._free
+                free: Module._free,
             };
             polyfillDecode();
-            polyfillCanvasToDataURL();
+            HTMLCanvasElement.prototype.toDataURL = getCanvasToDataUrlPolyfill();
+            createImageBitmap = getCreateImageBitmapPolyfill();
         });
+    });
     }
 }
+
+webpPolyfill();
